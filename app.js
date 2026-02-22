@@ -1,13 +1,12 @@
 const $ = id => document.getElementById(id);
 const fmt = n => `$${Number(n).toFixed(2)}`;
-const num = v => Number(v) || 0;
+const num = v => Number(v.replace(",", ".")) || 0;
 
-const STORE_KEY = "john-ledger-v1";
+const STORE_KEY = "john-ledger-v3";
 
 const store = {
   savings: 0,
   mgo: 0,
-  checking: 0,
   fronted: 0,
   entries: []
 };
@@ -21,24 +20,35 @@ function load() {
   if (d) Object.assign(store, d);
 }
 
-function apply(from, to, amt) {
-  if (from === "Savings") store.savings -= amt;
-  if (from === "MGO") store.mgo -= amt;
-  if (from === "Checking") store.checking -= amt;
-  if (from === "Fronted") store.fronted -= amt;
-
-  if (to === "Savings") store.savings += amt;
-  if (to === "MGO") store.mgo += amt;
-  if (to === "Checking") store.checking += amt;
-  if (to === "Fronted") store.fronted += amt;
-}
-
 function refresh() {
   $("savingsDisplay").textContent = fmt(store.savings);
   $("mgoDisplay").textContent = fmt(store.mgo);
-  $("checkingDisplay").textContent = fmt(store.checking);
   $("frontedDisplay").textContent = fmt(store.fronted);
   save();
+}
+
+function applyTransaction(type, from, to, amt) {
+  if (type === "deposit") {
+    if (to === "Savings") store.savings += amt;
+    if (to === "MGO") store.mgo += amt;
+    if (to === "Fronted") store.fronted += amt;
+  }
+
+  if (type === "debit") {
+    if (from === "Savings") store.savings -= amt;
+    if (from === "MGO") store.mgo -= amt;
+    if (from === "Fronted") store.fronted -= amt;
+  }
+
+  if (type === "transfer") {
+    if (from === "Savings") store.savings -= amt;
+    if (from === "MGO") store.mgo -= amt;
+    if (from === "Fronted") store.fronted -= amt;
+
+    if (to === "Savings") store.savings += amt;
+    if (to === "MGO") store.mgo += amt;
+    if (to === "Fronted") store.fronted += amt;
+  }
 }
 
 function renderHistory() {
@@ -47,79 +57,217 @@ function renderHistory() {
 
   store.entries
     .slice()
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .sort((a,b) => new Date(b.date) - new Date(a.date))
     .forEach(e => {
+
       const row = document.createElement("div");
       row.className = "history-item";
+      if (e.cleared) row.classList.add("cleared");
 
       row.innerHTML = `
         <div>
           <strong>${e.date}</strong> — ${fmt(e.amount)}
-          <div class="tiny">${e.from} → ${e.to}</div>
-          ${e.note ? `<div class="tiny">${e.note}</div>` : ""}
+          <div class="tiny">${e.type.toUpperCase()} ${e.from || ""} → ${e.to || ""}</div>
+          <div class="tiny">${e.note}</div>
         </div>
         <div>
-          ${e.to === "Fronted" ? `<button class="ghost resolve">Resolve</button>` : ""}
+          <button class="ghost resolve">Resolve</button>
           <button class="ghost delete">Delete</button>
         </div>
       `;
 
+      row.querySelector(".resolve").onclick = () => {
+        e.cleared = !e.cleared;
+        save();
+        renderHistory();
+      };
+
       row.querySelector(".delete").onclick = () => {
-        apply(e.to, e.from, e.amount);
+        reverseTransaction(e);
         store.entries = store.entries.filter(x => x.id !== e.id);
         refresh();
         renderHistory();
       };
 
-      const res = row.querySelector(".resolve");
-      if (res) {
-        res.onclick = () => row.classList.toggle("cleared");
-      }
-
       list.appendChild(row);
     });
 }
 
+function reverseTransaction(e) {
+  if (e.type === "deposit") {
+    if (e.to === "Savings") store.savings -= e.amount;
+    if (e.to === "MGO") store.mgo -= e.amount;
+    if (e.to === "Fronted") store.fronted -= e.amount;
+  }
+
+  if (e.type === "debit") {
+    if (e.from === "Savings") store.savings += e.amount;
+    if (e.from === "MGO") store.mgo += e.amount;
+    if (e.from === "Fronted") store.fronted += e.amount;
+  }
+
+  if (e.type === "transfer") {
+    if (e.from === "Savings") store.savings += e.amount;
+    if (e.from === "MGO") store.mgo += e.amount;
+    if (e.from === "Fronted") store.fronted += e.amount;
+
+    if (e.to === "Savings") store.savings -= e.amount;
+    if (e.to === "MGO") store.mgo -= e.amount;
+    if (e.to === "Fronted") store.fronted -= e.amount;
+  }
+}
+
+$("txnType").onchange = function() {
+  $("fromWrapper").style.display = "none";
+  $("toWrapper").style.display = "none";
+
+  if (this.value === "deposit") {
+    $("toWrapper").style.display = "block";
+  }
+
+  if (this.value === "debit") {
+    $("fromWrapper").style.display = "block";
+  }
+
+  if (this.value === "transfer") {
+    $("fromWrapper").style.display = "block";
+    $("toWrapper").style.display = "block";
+  }
+};
+
+$("entryAmt").addEventListener("blur", function () {
+  let value = this.value.trim();
+  if (!value) return;
+
+  value = value.replace(",", ".");
+  const number = parseFloat(value);
+
+  if (!isNaN(number)) {
+    this.value = number.toFixed(2);
+  } else {
+    this.value = "";
+  }
+});
+
 $("addEntry").onclick = () => {
+
+  const type = $("txnType").value;
+  const from = $("fromAcct").value;
+  const to = $("toAcct").value;
   const amt = num($("entryAmt").value);
-  if (!amt) return;
+  const note = $("entryNote").value.trim();
+
+  if (!type || !amt || !note) {
+    alert("Type, amount, and note are required.");
+    return;
+  }
+
+  if (type === "deposit" && !to) return;
+  if (type === "debit" && !from) return;
+  if (type === "transfer" && (!from || !to)) return;
+
+  applyTransaction(type, from, to, amt);
 
   const entry = {
     id: crypto.randomUUID(),
     date: $("entryDate").value || new Date().toISOString().slice(0,10),
+    type,
+    from,
+    to,
     amount: amt,
-    from: $("fromAcct").value,
-    to: $("toAcct").value,
-    note: $("entryNote").value
+    note,
+    cleared: false
   };
 
-  apply(entry.from, entry.to, amt);
   store.entries.push(entry);
 
   $("entryAmt").value = "";
   $("entryNote").value = "";
+  $("txnType").value = "";
+  $("fromAcct").value = "";
+  $("toAcct").value = "";
+  $("fromWrapper").style.display = "none";
+  $("toWrapper").style.display = "none";
 
   refresh();
   renderHistory();
 };
 
-$("clearChecking").onclick = () => {
-  store.checking = 0;
+$("clearFronted").onclick = () => {
+  if (store.fronted <= 0) return;
+  if (!confirm("Clear Fronted?")) return;
+  store.fronted = 0;
   refresh();
 };
 
-$("exportCsv").onclick = () => {
-  const from = $("fromDate").value;
-  const to = $("toDate").value;
+$("archiveMonth").onclick = () => {
+  if (!confirm("Archive month? This clears history only.")) return;
+  store.entries = [];
+  refresh();
+  renderHistory();
+};
 
-  const rows = store.entries.filter(e =>
-    (!from || e.date >= from) &&
-    (!to || e.date <= to)
+$("exportCsv").onclick = () => {
+
+  const includeBalances = $("includeBalances").checked;
+  const fromDate = $("fromDate").value;
+  const toDate = $("toDate").value;
+
+  let rows = store.entries.filter(e =>
+    (!fromDate || e.date >= fromDate) &&
+    (!toDate || e.date <= toDate)
   );
 
-  let csv = "Date,Amount,From,To,Note\n";
-  rows.forEach(r => {
-    csv += `${r.date},${r.amount},${r.from},${r.to},"${r.note || ""}"\n`;
+  rows.sort((a,b) => new Date(a.date) - new Date(b.date));
+
+  let csv = "Date,Type,From,To,Amount,Note,Cleared";
+
+  if (includeBalances) {
+    csv += ",Savings After,MGO After,Fronted After";
+  }
+
+  csv += "\n";
+
+  let tempSavings = store.savings;
+  let tempMGO = store.mgo;
+  let tempFronted = store.fronted;
+
+  if (includeBalances) {
+    // Recalculate from zero
+    tempSavings = 0;
+    tempMGO = 0;
+    tempFronted = 0;
+
+    rows.forEach(e => {
+      applyTemp(e, (s,m,f) => {
+        tempSavings = s;
+        tempMGO = m;
+        tempFronted = f;
+      });
+    });
+
+    tempSavings = 0;
+    tempMGO = 0;
+    tempFronted = 0;
+  }
+
+  rows.forEach(e => {
+
+    if (includeBalances) {
+      applyTemp(e, (s,m,f) => {
+        tempSavings = s;
+        tempMGO = m;
+        tempFronted = f;
+      });
+    }
+
+    csv += `${e.date},${e.type},${e.from || ""},${e.to || ""},${e.amount},"${e.note}",${e.cleared}`;
+
+    if (includeBalances) {
+      csv += `,${tempSavings},${tempMGO},${tempFronted}`;
+    }
+
+    csv += "\n";
   });
 
   const blob = new Blob([csv], { type: "text/csv" });
@@ -128,6 +276,41 @@ $("exportCsv").onclick = () => {
   a.download = "john-ledger-export.csv";
   a.click();
 };
+
+function applyTemp(e, callback) {
+
+  let s = 0, m = 0, f = 0;
+
+  if (!applyTemp.state) applyTemp.state = { s:0, m:0, f:0 };
+  s = applyTemp.state.s;
+  m = applyTemp.state.m;
+  f = applyTemp.state.f;
+
+  if (e.type === "deposit") {
+    if (e.to === "Savings") s += e.amount;
+    if (e.to === "MGO") m += e.amount;
+    if (e.to === "Fronted") f += e.amount;
+  }
+
+  if (e.type === "debit") {
+    if (e.from === "Savings") s -= e.amount;
+    if (e.from === "MGO") m -= e.amount;
+    if (e.from === "Fronted") f -= e.amount;
+  }
+
+  if (e.type === "transfer") {
+    if (e.from === "Savings") s -= e.amount;
+    if (e.from === "MGO") m -= e.amount;
+    if (e.from === "Fronted") f -= e.amount;
+
+    if (e.to === "Savings") s += e.amount;
+    if (e.to === "MGO") m += e.amount;
+    if (e.to === "Fronted") f += e.amount;
+  }
+
+  applyTemp.state = { s, m, f };
+  callback(s,m,f);
+}
 
 document.querySelectorAll(".tab").forEach(btn => {
   btn.onclick = () => {
