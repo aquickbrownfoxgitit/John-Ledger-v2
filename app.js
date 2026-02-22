@@ -94,6 +94,7 @@ function renderHistory() {
 }
 
 function reverseTransaction(e) {
+
   if (e.type === "deposit") {
     if (e.to === "Savings") store.savings -= e.amount;
     if (e.to === "MGO") store.mgo -= e.amount;
@@ -107,13 +108,15 @@ function reverseTransaction(e) {
   }
 
   if (e.type === "transfer") {
-    if (e.from === "Savings") store.savings += e.amount;
-    if (e.from === "MGO") store.mgo += e.amount;
-    if (e.from === "Fronted") store.fronted += e.amount;
 
+    // reverse the original transfer
     if (e.to === "Savings") store.savings -= e.amount;
     if (e.to === "MGO") store.mgo -= e.amount;
     if (e.to === "Fronted") store.fronted -= e.amount;
+
+    if (e.from === "Savings") store.savings += e.amount;
+    if (e.from === "MGO") store.mgo += e.amount;
+    if (e.from === "Fronted") store.fronted += e.amount;
   }
 }
 
@@ -323,3 +326,4 @@ document.querySelectorAll(".tab").forEach(btn => {
 load();
 refresh();
 renderHistory();
+
